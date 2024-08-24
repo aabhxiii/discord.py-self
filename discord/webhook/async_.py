@@ -153,13 +153,14 @@ class AsyncWebhookAdapter:
         if reason is not None:
             headers['X-Audit-Log-Reason'] = urlquote(reason)
 
-        response: Optional[aiohttp.ClientResponse] = None
+        response: aiohttp.ClientResponse = None
         data: Optional[Union[Dict[str, Any], str]] = None
         method = route.method
         url = route.url
         webhook_id = route.webhook_id
 
         async with AsyncDeferredLock(lock) as lock:
+            session = aiohttp.ClientSession()
             for attempt in range(5):
                 for file in files:
                     file.reset(seek=attempt)
@@ -169,7 +170,7 @@ class AsyncWebhookAdapter:
                     for p in multipart:
                         form_data.add_field(**p)
                     to_send = form_data
-
+                
                 try:
                     async with session.request(
                         method, url, data=to_send, headers=headers, params=params, proxy=proxy, proxy_auth=proxy_auth
@@ -222,6 +223,8 @@ class AsyncWebhookAdapter:
                         await asyncio.sleep(1 + attempt * 2)
                         continue
                     raise
+                finally:
+                    await session.close()
 
             if response:
                 if response.status >= 500:
@@ -1525,7 +1528,7 @@ class Webhook(BaseWebhook):
         if thread_name is not MISSING and thread is not MISSING:
             raise TypeError('Cannot mix thread_name and thread keyword arguments.')
 
-        with handle_message_parameters(
+        params = handle_message_parameters(
             content=content,
             username=username,
             avatar_url=avatar_url,
@@ -1538,24 +1541,24 @@ class Webhook(BaseWebhook):
             thread_name=thread_name,
             allowed_mentions=allowed_mentions,
             previous_allowed_mentions=previous_mentions,
-        ) as params:
-            adapter = async_context.get()
-            thread_id: Optional[int] = None
-            if thread is not MISSING:
-                thread_id = thread.id
+        )
+        adapter = async_context.get()
+        thread_id: Optional[int] = None
+        if thread is not MISSING:
+            thread_id = thread.id
 
-            data = await adapter.execute_webhook(
-                self.id,
-                self.token,
-                session=self.session,
-                proxy=self.proxy,
-                proxy_auth=self.proxy_auth,
-                payload=params.payload,
-                multipart=params.multipart,
-                files=params.files,
-                thread_id=thread_id,
-                wait=wait,
-            )
+        data = await adapter.execute_webhook(
+            self.id,
+            self.token,
+            session=self.session,
+            proxy=self.proxy,
+            proxy_auth=self.proxy_auth,
+            payload=params.payload,
+            multipart=params.multipart,
+            files=params.files,
+            thread_id=thread_id,
+            wait=wait,
+        )
 
         msg = None
         if wait:
